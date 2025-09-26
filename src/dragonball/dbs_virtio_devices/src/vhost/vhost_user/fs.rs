@@ -18,10 +18,10 @@ use kvm_ioctls::VmFd;
 use libc::{c_void, off64_t, pread64, pwrite64};
 use log::*;
 use vhost_rs::vhost_user::message::{
-    VhostUserFSSlaveMsg, VhostUserFSSlaveMsgFlags, VhostUserProtocolFeatures,
-    VhostUserVirtioFeatures, VHOST_USER_FS_SLAVE_ENTRIES,
+    VhostUserFSBackendMsg, VhostUserFSBackendMsgFlags, VhostUserProtocolFeatures,
+    VhostUserVirtioFeatures, VHOST_USER_FS_BACKEND_ENTRIES,
 };
-use vhost_rs::vhost_user::{HandlerResult, Master, MasterReqHandler, VhostUserMasterReqHandler};
+use vhost_rs::vhost_user::{HandlerResult, Frontend, FrontendReqHandler, VhostUserFrontendReqHandler};
 use vhost_rs::VhostBackend;
 use virtio_queue::QueueT;
 use vm_memory::{
@@ -78,7 +78,7 @@ impl<AS: GuestAddressSpace> SlaveReqHandler<AS> {
     }
 }
 
-impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
+impl<AS: GuestAddressSpace> VhostUserFrontendReqHandler for SlaveReqHandler<AS> {
     fn handle_config_change(&self) -> HandlerResult<u64> {
         trace!(target: "vhost-fs", "{}: SlaveReqHandler::handle_config_change()", self.id);
         debug!("{}: unhandle device_config_change event", self.id);
@@ -86,10 +86,10 @@ impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
         Ok(0)
     }
 
-    fn fs_slave_map(&self, fs: &VhostUserFSSlaveMsg, fd: &dyn AsRawFd) -> HandlerResult<u64> {
+    fn fs_backend_map(&self, fs: &VhostUserFSBackendMsg, fd: &dyn AsRawFd) -> HandlerResult<u64> {
         trace!(target: "vhost-fs", "{}: SlaveReqHandler::fs_slave_map()", self.id);
 
-        for i in 0..VHOST_USER_FS_SLAVE_ENTRIES {
+        for i in 0..VHOST_USER_FS_BACKEND_ENTRIES {
             let offset = fs.cache_offset[i];
             let len = fs.len[i];
 
@@ -140,10 +140,10 @@ impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
         Ok(0)
     }
 
-    fn fs_slave_unmap(&self, fs: &VhostUserFSSlaveMsg) -> HandlerResult<u64> {
+    fn fs_backend_unmap(&self, fs: &VhostUserFSBackendMsg) -> HandlerResult<u64> {
         trace!(target: "vhost-fs", "{}: SlaveReqHandler::fs_slave_map()", self.id);
 
-        for i in 0..VHOST_USER_FS_SLAVE_ENTRIES {
+        for i in 0..VHOST_USER_FS_BACKEND_ENTRIES {
             let offset = fs.cache_offset[i];
             let mut len = fs.len[i];
 
@@ -193,10 +193,10 @@ impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
         Ok(0)
     }
 
-    fn fs_slave_sync(&self, fs: &VhostUserFSSlaveMsg) -> HandlerResult<u64> {
+    fn fs_backend_sync(&self, fs: &VhostUserFSBackendMsg) -> HandlerResult<u64> {
         trace!(target: "vhost-fs", "{}: SlaveReqHandler::fs_slave_sync()", self.id);
 
-        for i in 0..VHOST_USER_FS_SLAVE_ENTRIES {
+        for i in 0..VHOST_USER_FS_BACKEND_ENTRIES {
             let offset = fs.cache_offset[i];
             let len = fs.len[i];
 
@@ -231,13 +231,13 @@ impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
         Ok(0)
     }
 
-    fn fs_slave_io(&self, fs: &VhostUserFSSlaveMsg, fd: &dyn AsRawFd) -> HandlerResult<u64> {
+    fn fs_backend_io(&self, fs: &VhostUserFSBackendMsg, fd: &dyn AsRawFd) -> HandlerResult<u64> {
         trace!(target: "vhost-fs", "{}: SlaveReqHandler::fs_slave_io()", self.id);
 
         let guard = self.mem.memory();
         let mem = guard.deref();
         let mut done: u64 = 0;
-        for i in 0..VHOST_USER_FS_SLAVE_ENTRIES {
+        for i in 0..VHOST_USER_FS_BACKEND_ENTRIES {
             // Ignore if the length is 0.
             if fs.len[i] == 0 {
                 continue;
@@ -280,8 +280,8 @@ impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
             };
 
             while len > 0 {
-                let ret = if (fs.flags[i] & VhostUserFSSlaveMsgFlags::MAP_W)
-                    == VhostUserFSSlaveMsgFlags::MAP_W
+                let ret = if (fs.flags[i] & VhostUserFSBackendMsgFlags::MAP_W)
+                    == VhostUserFSBackendMsgFlags::MAP_W
                 {
                     debug!("{}: write: foffset={:x}, len={:x}", self.id, foffset, len);
                     unsafe {
@@ -299,8 +299,8 @@ impl<AS: GuestAddressSpace> VhostUserMasterReqHandler for SlaveReqHandler<AS> {
 
                 if ret < 0 {
                     let e = std::io::Error::last_os_error();
-                    if (fs.flags[i] & VhostUserFSSlaveMsgFlags::MAP_W)
-                        == VhostUserFSSlaveMsgFlags::MAP_W
+                    if (fs.flags[i] & VhostUserFSBackendMsgFlags::MAP_W)
+                        == VhostUserFSBackendMsgFlags::MAP_W
                     {
                         error!("{}: fs_slave_io: pwrite failed, {}", self.id, e);
                     } else {
@@ -341,11 +341,11 @@ pub struct VhostUserFsHandler<
     AS: GuestAddressSpace,
     Q: QueueT,
     R: GuestMemoryRegion,
-    S: VhostUserMasterReqHandler,
+    S: VhostUserFrontendReqHandler,
 > {
     config: VirtioDeviceConfig<AS, Q, R>,
     device: Arc<Mutex<VhostUserFsDevice>>,
-    slave_req_handler: Option<MasterReqHandler<S>>,
+    slave_req_handler: Option<FrontendReqHandler<S>>,
     id: String,
 }
 
@@ -354,7 +354,7 @@ where
     AS: 'static + GuestAddressSpace + Send + Sync,
     Q: QueueT + Send + 'static,
     R: GuestMemoryRegion + Send + Sync + 'static,
-    S: 'static + Send + VhostUserMasterReqHandler,
+    S: 'static + Send + VhostUserFrontendReqHandler,
 {
     fn process(&mut self, events: Events, _ops: &mut EventOps) {
         trace!(target: "vhost-fs", "{}: VhostUserFsHandler::process({})", self.id, events.data());
@@ -425,7 +425,7 @@ impl VhostUserFsDevice {
         // Connect to the vhost-user socket.
         info!("{}: try to connect to {:?}", VHOST_USER_FS_NAME, path);
         let num_queues = NUM_QUEUE_OFFSET + req_num_queues;
-        let master = Master::connect(path, num_queues as u64).map_err(VirtioError::VhostError)?;
+        let master = Frontend::connect(path, num_queues as u64).map_err(VirtioError::VhostError)?;
 
         info!("{}: get features", VHOST_USER_FS_NAME);
         let avail_features = master.get_features().map_err(VirtioError::VhostError)?;
@@ -475,7 +475,7 @@ impl VhostUserFsDevice {
         let mut features = VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::REPLY_ACK;
         if self.is_dax_on() {
             features |=
-                VhostUserProtocolFeatures::SLAVE_REQ | VhostUserProtocolFeatures::SLAVE_SEND_FD;
+                VhostUserProtocolFeatures::BACKEND_REQ | VhostUserProtocolFeatures::BACKEND_SEND_FD;
         }
         features
     }
@@ -484,7 +484,7 @@ impl VhostUserFsDevice {
         AS: GuestAddressSpace,
         Q: QueueT,
         R: GuestMemoryRegion,
-        S: VhostUserMasterReqHandler,
+        S: VhostUserFrontendReqHandler,
     >(
         &mut self,
         handler: &VhostUserFsHandler<AS, Q, R, S>,
@@ -621,7 +621,7 @@ where
                 mem: config.vm_as.clone(),
                 id: device.device_info.driver_name.clone(),
             });
-            let req_handler = MasterReqHandler::new(vu_master_req_handler)
+            let req_handler = FrontendReqHandler::new(vu_master_req_handler)
                 .map_err(|e| ActivateError::VhostActivate(vhost_rs::Error::VhostUserProtocol(e)))?;
 
             Some(req_handler)

@@ -10,7 +10,7 @@ use dbs_utils::epoll_manager::{EventOps, EventSet, Events};
 use log::*;
 use vhost_rs::vhost_user::message::{VhostUserProtocolFeatures, VhostUserVringAddrFlags};
 use vhost_rs::vhost_user::{
-    Error as VhostUserError, Listener as VhostUserListener, Master, VhostUserMaster,
+    Error as VhostUserError, Listener as VhostUserListener, Frontend, VhostUserFrontend,
 };
 use vhost_rs::{Error as VhostError, VhostBackend, VhostUserMemoryRegionInfo, VringConfigData};
 use virtio_bindings::bindings::virtio_net::VIRTIO_F_RING_PACKED;
@@ -50,14 +50,14 @@ impl Listener {
     }
 
     // Wait for an incoming connection until success.
-    pub fn accept(&self) -> VirtioResult<(Master, u64)> {
+    pub fn accept(&self) -> VirtioResult<(Frontend, u64)> {
         loop {
             match self.try_accept() {
-                Ok(Some((master, mut feature))) => {
+                Ok(Some((frontend, mut feature))) => {
                     // Disable VIRTIO_F_RING_PACKED since the layout of packed virtqueue isn't
                     // supported by `Endpoint::negotiate()`.
                     feature &= !(1 << VIRTIO_F_RING_PACKED);
-                    return Ok((master, feature));
+                    return Ok((frontend, feature));
                 }
                 Ok(None) => continue,
                 Err(e) => return Err(e),
@@ -65,17 +65,17 @@ impl Listener {
         }
     }
 
-    pub fn try_accept(&self) -> VirtioResult<Option<(Master, u64)>> {
+    pub fn try_accept(&self) -> VirtioResult<Option<(Frontend, u64)>> {
         let sock = match self.listener.accept() {
             Ok(Some(conn)) => conn,
             Ok(None) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
 
-        let mut master = Master::from_stream(sock, 1);
+        let mut frontend = Frontend::from_stream(sock, 1);
         info!("{}: try to get virtio features from slave.", self.name);
-        match Endpoint::initialize(&mut master) {
-            Ok(Some(features)) => Ok(Some((master, features))),
+        match Endpoint::initialize(&mut frontend) {
+            Ok(Some(features)) => Ok(Some((frontend, features))),
             // The new connection has been closed, try again.
             Ok(None) => {
                 warn!(
@@ -159,8 +159,8 @@ impl<AS: GuestAddressSpace, Q: QueueT, R: GuestMemoryRegion> EndpointParam<'_, A
 /// Caller needs to ensure mutual exclusive access to the object.
 pub(super) struct Endpoint {
     /// Underlying vhost-user communication endpoint.
-    conn: Option<Master>,
-    old: Option<Master>,
+    conn: Option<Frontend>,
+    old: Option<Frontend>,
     /// Token to register epoll event for the underlying socket.
     slot: u32,
     /// Identifier string for logs.
@@ -168,9 +168,9 @@ pub(super) struct Endpoint {
 }
 
 impl Endpoint {
-    pub fn new(master: Master, slot: u32, name: String) -> Self {
+    pub fn new(frontend: Frontend, slot: u32, name: String) -> Self {
         Endpoint {
-            conn: Some(master),
+            conn: Some(frontend),
             old: None,
             slot,
             name,
@@ -186,11 +186,11 @@ impl Endpoint {
     /// * - Ok(Some(avial_features)): virtio features from the slave
     /// * - Ok(None): underlying communicaiton channel gets broken during negotiation
     /// * - Err(e): error conditions
-    fn initialize(master: &mut Master) -> VirtioResult<Option<u64>> {
+    fn initialize(frontend: &mut Frontend) -> VirtioResult<Option<u64>> {
         // 1. Seems that some vhost-user slaves depend on the get_features request to driver its
         // internal state machine.
         // N.B. it's really TDD, we just found it works in this way. Any spec about this?
-        let features = match master.get_features() {
+        let features = match frontend.get_features() {
             Ok(val) => val,
             Err(VhostError::VhostUserProtocol(VhostUserError::SocketBroken(_e))) => {
                 return Ok(None)
@@ -242,7 +242,7 @@ impl Endpoint {
     pub fn negotiate<AS: GuestAddressSpace, Q: QueueT, R: GuestMemoryRegion>(
         &mut self,
         config: &EndpointParam<AS, Q, R>,
-        mut old: Option<&mut Master>,
+        mut old: Option<&mut Frontend>,
     ) -> VirtioResult<()> {
         let guard = config.virtio_config.lock_guest_memory();
         let mem = guard.deref();
@@ -286,12 +286,12 @@ impl Endpoint {
         );
 
         // Setup slave channel if SLAVE_REQ protocol feature is set
-        if protocol_features.contains(VhostUserProtocolFeatures::SLAVE_REQ) {
+        if protocol_features.contains(VhostUserProtocolFeatures::BACKEND_REQ) {
             match config.slave_req_fd {
-                Some(fd) => master.set_slave_request_fd(&fd)?,
+                Some(fd) => master.set_backend_request_fd(&fd)?,
                 None => {
                     error!(
-                        "{}: Protocol feature SLAVE_REQ is set but not slave channel fd",
+                        "{}: Protocol feature BACKEND_REQ is set but not slave channel fd",
                         self.name
                     );
                     return Err(VhostError::VhostUserProtocol(VhostUserError::InvalidParam).into());
@@ -458,11 +458,11 @@ impl Endpoint {
     /// Restore communication with the vhost-user slave on reconnect.
     pub fn reconnect<AS: GuestAddressSpace, Q: QueueT, R: GuestMemoryRegion>(
         &mut self,
-        master: Master,
+        frontend: Frontend,
         config: &EndpointParam<AS, Q, R>,
         ops: &mut EventOps,
     ) -> VirtioResult<()> {
-        let mut old = self.conn.replace(master);
+        let mut old = self.conn.replace(frontend);
         if let Err(e) = self.negotiate(config, old.as_mut()) {
             error!("{}: failed to initialize connection: {}", self.name, e);
             self.conn = old;
@@ -519,22 +519,22 @@ impl Endpoint {
     }
 
     /// Deregister the underlying socket from the epoll controller.
-    pub fn deregister_epoll_event(&self, master: &Master, ops: &mut EventOps) -> VirtioResult<()> {
+    pub fn deregister_epoll_event(&self, frontend: &Frontend, ops: &mut EventOps) -> VirtioResult<()> {
         info!(
             "{}: unregister epoll event for fd {}.",
             self.name,
-            master.as_raw_fd()
+            frontend.as_raw_fd()
         );
         ops.remove(Events::with_data(
-            master,
+            frontend,
             self.slot,
             EventSet::HANG_UP | EventSet::EDGE_TRIGGERED,
         ))
         .map_err(VirtioError::EpollMgr)
     }
 
-    pub fn set_master(&mut self, master: Master) {
-        self.conn = Some(master);
+    pub fn set_master(&mut self, frontend: Frontend) {
+        self.conn = Some(frontend);
     }
 }
 

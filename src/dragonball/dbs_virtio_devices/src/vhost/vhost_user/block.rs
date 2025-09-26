@@ -25,7 +25,7 @@ use vhost_rs::vhost_user::message::{
     VhostUserConfigFlags, VhostUserProtocolFeatures, VhostUserVirtioFeatures,
     VHOST_USER_CONFIG_OFFSET,
 };
-use vhost_rs::vhost_user::{Master, VhostUserMaster};
+use vhost_rs::vhost_user::{Frontend, VhostUserFrontend};
 use vhost_rs::{Error as VhostError, VhostBackend};
 use virtio_bindings::bindings::virtio_blk::{VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_SEG_MAX};
 use virtio_queue::QueueT;
@@ -231,10 +231,10 @@ impl VhostUserBlockDevice {
 
         info!("vhost-user-blk: try to connect to {:?}", vhost_socket);
         // Connect to the vhost-user socket.
-        let mut master = Master::connect(&vhost_socket, 1).map_err(VirtIoError::VhostError)?;
+        let mut frontend = Frontend::connect(&vhost_socket, 1).map_err(VirtIoError::VhostError)?;
 
         info!("vhost-user-blk: get features");
-        let avail_features = master.get_features().map_err(VirtIoError::VhostError)?;
+        let avail_features = frontend.get_features().map_err(VirtIoError::VhostError)?;
         info!(
             "vhost-user-blk: get features done, ret:{:?}, queue_size: {:?}",
             avail_features,
@@ -243,15 +243,15 @@ impl VhostUserBlockDevice {
 
         // for the standard vhost_user_blk device, get the device config from slave.
         let config_space = {
-            master.set_features(avail_features)?;
-            let protocol_featuers = master.get_protocol_features()?;
+            frontend.set_features(avail_features)?;
+            let protocol_featuers = frontend.get_protocol_features()?;
             // set the config features to get the device's config from slave.
-            master.set_protocol_features(protocol_featuers)?;
+            frontend.set_protocol_features(protocol_featuers)?;
 
             let config_len = mem::size_of::<VirtioBlockConfig>();
             let config_space: Vec<u8> = vec![0u8; config_len];
 
-            let (_, mut config_space) = master
+            let (_, mut config_space) = frontend
                 .get_config(
                     VHOST_USER_CONFIG_OFFSET,
                     config_len as u32,
@@ -279,7 +279,7 @@ impl VhostUserBlockDevice {
                 event_mgr,
             ),
             endpoint: Endpoint::new(
-                master,
+                frontend,
                 MASTER_SLOT,
                 VHOST_USER_BLOCK_DRIVER_NAME.to_string(),
             ),
@@ -290,13 +290,13 @@ impl VhostUserBlockDevice {
         })
     }
 
-    fn reconnect_to_server(&mut self) -> VirtIoResult<Master> {
+    fn reconnect_to_server(&mut self) -> VirtIoResult<Frontend> {
         if !Path::new(self.vhost_socket.as_str()).exists() {
             return Err(VirtIoError::InternalError);
         }
-        let master = Master::connect(&self.vhost_socket, 1).map_err(VirtIoError::VhostError)?;
+        let frontend = Frontend::connect(&self.vhost_socket, 1).map_err(VirtIoError::VhostError)?;
 
-        Ok(master)
+        Ok(frontend)
     }
 
     // vhost-user protocol features this device supports
@@ -360,10 +360,10 @@ impl VhostUserBlockDevice {
             if !Path::new(self.vhost_socket.as_str()).exists() {
                 return Err(ActivateError::InternalError);
             }
-            let master = Master::connect(String::from(self.vhost_socket.as_str()), 1)
+            let frontend = Frontend::connect(String::from(self.vhost_socket.as_str()), 1)
                 .map_err(VirtIoError::VhostError)?;
 
-            self.endpoint.set_master(master);
+            self.endpoint.set_master(frontend);
         }
 
         Ok(())
@@ -388,11 +388,11 @@ impl VhostUserBlockDevice {
         R: GuestMemoryRegion + Send + Sync + 'static,
     >(
         &mut self,
-        master: Master,
+        frontend: Frontend,
         config: EndpointParam<AS, Q, R>,
         ops: &mut EventOps,
     ) -> std::result::Result<(), VirtIoError> {
-        self.endpoint.reconnect(master, &config, ops)
+        self.endpoint.reconnect(frontend, &config, ops)
     }
 
     fn handle_disconnect(&mut self, ops: &mut EventOps) -> std::result::Result<(), VirtIoError> {

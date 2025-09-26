@@ -55,6 +55,7 @@ const NUM_QUEUE_OFFSET: usize = 1;
 const CACHE_ALWAYS_TIMEOUT: u64 = 86_400; // 1 day
 const CACHE_AUTO_TIMEOUT: u64 = 1;
 const CACHE_NONE_TIMEOUT: u64 = 0;
+const CACHE_METADATA_TIMEOUT: u64 = 1;
 
 // VirtioFs backend fs type
 pub(crate) const PASSTHROUGHFS: &str = "passthroughfs";
@@ -250,6 +251,7 @@ impl<AS: GuestAddressSpace> VirtioFs<AS> {
             CachePolicy::Always => Duration::from_secs(CACHE_ALWAYS_TIMEOUT),
             CachePolicy::Never => Duration::from_secs(CACHE_NONE_TIMEOUT),
             CachePolicy::Auto => Duration::from_secs(CACHE_AUTO_TIMEOUT),
+            CachePolicy::Metadata => Duration::from_secs(CACHE_METADATA_TIMEOUT),
         }
     }
 
