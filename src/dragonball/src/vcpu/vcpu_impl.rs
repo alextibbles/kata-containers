@@ -490,19 +490,23 @@ impl Vcpu {
                         error!("Received KVM_EXIT_INTERNAL_ERROR signal");
                         Err(VcpuError::VcpuUnhandledKvmExit)
                     }
-                    VcpuExit::SystemEvent(event_type, event_flags) => match event_type {
+                    VcpuExit::SystemEvent(event_type, event_data) => match event_type {
                         KVM_SYSTEM_EVENT_RESET | KVM_SYSTEM_EVENT_SHUTDOWN => {
                             info!(
-                                "Received KVM_SYSTEM_EVENT: type: {}, event: {}",
-                                event_type, event_flags
+                                "Received KVM_SYSTEM_EVENT: type: {}, data: {}",
+                                event_type,
+                                event_data.into_iter().map(|i| i.to_string())
+                                    .collect::<Vec<_>>().join(", ")
                             );
                             Ok(VcpuEmulation::Stopped)
                         }
                         _ => {
                             self.metrics.failures.inc();
                             error!(
-                                "Received KVM_SYSTEM_EVENT signal type: {}, flag: {}",
-                                event_type, event_flags
+                                "Received KVM_SYSTEM_EVENT signal type: {}, data: {}",
+                                event_type, 
+                                event_data.into_iter().map(|i| i.to_string())
+                                    .collect::<Vec<_>>().join(", ")
                             );
                             Err(VcpuError::VcpuUnhandledKvmExit)
                         }
@@ -806,7 +810,7 @@ pub mod tests {
         FailEntry(u64, u32),
         InternalError,
         Unknown,
-        SystemEvent(u32, u64),
+        SystemEvent(u32, &'static [u64]),
         Error(i32),
     }
 
@@ -949,17 +953,17 @@ pub mod tests {
         assert!(matches!(res, Err(VcpuError::VcpuUnhandledKvmExit)));
 
         // KVM_SYSTEM_EVENT_RESET
-        *(EMULATE_RES.lock().unwrap()) = EmulationCase::SystemEvent(KVM_SYSTEM_EVENT_RESET, 0);
+        *(EMULATE_RES.lock().unwrap()) = EmulationCase::SystemEvent(KVM_SYSTEM_EVENT_RESET, &[0]);
         let res = vcpu.run_emulation();
         assert!(matches!(res, Ok(VcpuEmulation::Stopped)));
 
         // KVM_SYSTEM_EVENT_SHUTDOWN
-        *(EMULATE_RES.lock().unwrap()) = EmulationCase::SystemEvent(KVM_SYSTEM_EVENT_SHUTDOWN, 0);
+        *(EMULATE_RES.lock().unwrap()) = EmulationCase::SystemEvent(KVM_SYSTEM_EVENT_SHUTDOWN, &[0]);
         let res = vcpu.run_emulation();
         assert!(matches!(res, Ok(VcpuEmulation::Stopped)));
 
         // Other system event
-        *(EMULATE_RES.lock().unwrap()) = EmulationCase::SystemEvent(0, 0);
+        *(EMULATE_RES.lock().unwrap()) = EmulationCase::SystemEvent(0, &[0]);
         let res = vcpu.run_emulation();
         assert!(matches!(res, Err(VcpuError::VcpuUnhandledKvmExit)));
 
