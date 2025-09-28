@@ -66,7 +66,7 @@ impl Vcpu {
             vcpu_state_event,
             vcpu_state_sender,
             support_immediate_exit,
-            mpidr: 0,
+            mpidr: [0, 0, 0, 0, 0, 0, 0, 0],
             exit_evt,
             metrics: Arc::new(VcpuMetrics::default()),
         })
@@ -111,19 +111,19 @@ impl Vcpu {
             regs::setup_regs(
                 &self.fd,
                 self.id,
-                address.raw_value(),
-                get_fdt_addr(vm_as.memory().deref()),
+                &address.raw_value().to_le_bytes(),
+                &get_fdt_addr(vm_as.memory().deref()).to_le_bytes(),
             )
             .map_err(VcpuError::REGSConfiguration)?;
         }
 
-        self.mpidr = regs::read_mpidr(&self.fd).map_err(VcpuError::REGSConfiguration)?;
+        let s = regs::read_mpidr(&self.fd, &mut self.mpidr).map_err(VcpuError::REGSConfiguration)?;
 
         Ok(())
     }
 
     /// Gets the MPIDR register value.
     pub fn get_mpidr(&self) -> u64 {
-        self.mpidr
+        u64::from_le_bytes(self.mpidr)
     }
 }

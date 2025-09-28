@@ -313,7 +313,7 @@ pub struct Vcpu {
 
     /// Multiprocessor affinity register recorded for aarch64
     #[cfg(target_arch = "aarch64")]
-    pub(crate) mpidr: u64,
+    pub(crate) mpidr: [u8; 8],
 }
 
 // Using this for easier explicit type-casting to help IDEs interpret the code.

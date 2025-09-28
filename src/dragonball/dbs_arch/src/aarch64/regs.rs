@@ -42,6 +42,7 @@ const PSR_A_BIT: u64 = 0x0000_0100;
 const PSR_D_BIT: u64 = 0x0000_0200;
 // Taken from arch/arm64/kvm/inject_fault.c.
 const PSTATE_FAULT_BITS_64: u64 = PSR_MODE_EL1h | PSR_A_BIT | PSR_F_BIT | PSR_I_BIT | PSR_D_BIT;
+const PSTATE_FAULT_BITS_U8S: [u8; 8] = PSTATE_FAULT_BITS_64.to_le_bytes();
 
 // Following are macros that help with getting the ID of a aarch64 core register.
 // The core register are represented by the user_pt_regs structure. Look for it in
@@ -111,22 +112,22 @@ arm64_sys_reg!(MPIDR_EL1, 3, 0, 0, 0, 5);
 /// * `cpu_id` - Index of current vcpu.
 /// * `boot_ip` - Starting instruction pointer.
 /// * `mem` - Reserved DRAM for current VM.
-pub fn setup_regs(vcpu: &VcpuFd, cpu_id: u8, boot_ip: u64, fdt_address: u64) -> Result<()> {
+pub fn setup_regs(vcpu: &VcpuFd, cpu_id: u8, boot_ip: &[u8], fdt_address: &[u8]) -> Result<()> {
     // Get the register index of the PSTATE (Processor State) register.
-    vcpu.set_one_reg(arm64_core_reg!(pstate), PSTATE_FAULT_BITS_64 as u128)
+    vcpu.set_one_reg(arm64_core_reg!(pstate), &PSTATE_FAULT_BITS_U8S)
         .map_err(Error::SetCoreRegister)?;
 
     // Other vCPUs are powered off initially awaiting PSCI wakeup.
     if cpu_id == 0 {
         // Setting the PC (Processor Counter) to the current program address (kernel address).
-        vcpu.set_one_reg(arm64_core_reg!(pc), boot_ip as u128)
+        vcpu.set_one_reg(arm64_core_reg!(pc), boot_ip)
             .map_err(Error::SetCoreRegister)?;
 
         // Last mandatory thing to set -> the address pointing to the FDT (also called DTB).
         // "The device tree blob (dtb) must be placed on an 8-byte boundary and must
         // not exceed 2 megabytes in size." -> https://www.kernel.org/doc/Documentation/arm64/booting.txt.
         // We are choosing to place it the end of DRAM. See `get_fdt_addr`.
-        vcpu.set_one_reg(arm64_core_reg!(regs), fdt_address as u128)
+        vcpu.set_one_reg(arm64_core_reg!(regs), fdt_address)
             .map_err(Error::SetCoreRegister)?;
     }
     Ok(())
@@ -156,9 +157,9 @@ pub fn is_system_register(regid: u64) -> bool {
 /// # Arguments
 ///
 /// * `vcpu` - Structure for the VCPU that holds the VCPU's fd.
-pub fn read_mpidr(vcpu: &VcpuFd) -> Result<u64> {
-    vcpu.get_one_reg(MPIDR_EL1)
-        .map(|value| value as u64)
+pub fn read_mpidr(vcpu: &VcpuFd, data: &mut [u8]) -> Result<usize> {
+    vcpu.get_one_reg(MPIDR_EL1, data)
+        .map(|value| value as usize)
         .map_err(Error::GetSysRegister)
 }
 
